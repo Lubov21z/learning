@@ -3,7 +3,7 @@ from django.shortcuts import render, get_object_or_404, redirect
 from django.core.cache import cache
 
 from stock.models import Stock, AccountCurrency, AccountStock
-from stock.forms import BuySellForm
+from stock.forms import BuySellForm, SellForm
 
 def stock_list(request):
     stocks = Stock.objects.all()
@@ -17,7 +17,8 @@ def stock_detail(request, pk):
     stock = get_object_or_404(Stock, pk=pk)
     context = {
         'stock': stock,
-        'form': BuySellForm(initial={'price': stock.get_random_price()})
+        'buy_form': BuySellForm(initial={'price': stock.get_random_price()}),
+        'sell_form': SellForm(initial={'price': stock.get_random_price()})
     }
     return render(request, 'stock.html', context)
 
@@ -93,3 +94,44 @@ def account(request):
     }
 
     return render(request, template_name='account.html', context=context)
+
+@login_required
+def stock_sell(request, pk):
+    if request.method != "POST":
+        return redirect('stock:detail', pk=pk)
+
+    stock = get_object_or_404(Stock, pk=pk)
+    form = SellForm(request.POST)
+
+    if form.is_valid():
+        amount = form.cleaned_data['amount']
+        price = form.cleaned_data['price']
+        sell_cost = price * amount
+
+        acc_stock = get_object_or_404(AccountStock, account=request.user.account, stock=stock)
+        
+        if acc_stock.amount < amount:
+            form.add_error(None, f'У вас недостаточно акций {stock.ticker} для продажи')
+        else:
+            # Уменьшаем количество акций
+            acc_stock.amount -= amount
+            acc_stock.save()
+            
+            # Увеличиваем валютный счёт
+            acc_currency, created = AccountCurrency.objects.get_or_create(
+                account=request.user.account, 
+                currency=stock.currency,
+                defaults={'amount': 0}
+            )
+            acc_currency.amount += sell_cost
+            acc_currency.save()
+            
+            return redirect('stock:account')
+
+    context = {
+        'stock': stock,
+        'sell_form': form,
+        'buy_form': BuySellForm(initial={'price': stock.get_random_price()})
+    }
+
+    return render(request, 'stock.html', context)
